@@ -1,0 +1,127 @@
+NAME
+    wm — YaoiGUI Window Manager library
+
+SYNOPSIS
+    #include "../shell/wm.h"
+
+    wm_win_t *wm_open(title, x, y, w, h);
+    wm_win_t *wm_open_ex(title, x, y, w, h, flags);
+    void      wm_close(win);
+    int       wm_should_close(win);
+
+    void  wm_print(win, str);
+    void  wm_printf(win, fmt, ...);
+    void  wm_clear_text(win);
+
+    void  wm_fill_rect(win, x, y, w, h, colour);
+    void  wm_draw_rect(win, x, y, w, h, colour);
+    void  wm_draw_char(win, x, y, ch, fg, bg);
+    void  wm_draw_string(win, x, y, str, fg, bg);
+    void  wm_put_pixel(win, x, y, colour);
+
+    int   wm_client_width(win);
+    int   wm_client_height(win);
+    void  wm_client_origin(win, *x_out, *y_out);
+
+    char  wm_poll_key(void);
+    int   wm_poll_mouse(win, *dx, *dy, *buttons, *cx, *cy);
+
+    void  wm_flush(win);
+    void  wm_flush_all(void);
+
+DESCRIPTION
+    The wm library lets kernel/shell code create and control GUI windows
+    inside the YaoiGUI compositor without touching yaoigui.c internals.
+
+    Windows are limited to MAX_WINS (6) total across the whole session.
+    The compositor owns the flip cadence (~60 fps); wm_flush() is only
+    needed when running a standalone draw loop outside yaoigui_run().
+
+LIFECYCLE
+    wm_open(title, x, y, w, h)
+        Allocate a new terminal-mode window at screen position (x,y)
+        with total size w x h (including the title bar).
+        Returns NULL if all 6 slots are occupied.
+
+    wm_open_ex(title, x, y, w, h, flags)
+        Like wm_open but with explicit flags:
+          WM_FLAG_TERMINAL  — scrolling text terminal (default)
+          WM_FLAG_CANVAS    — raw pixel canvas, no terminal
+          WM_FLAG_NODECOR   — no title bar (fullscreen overlay)
+
+    wm_close(win)
+        Mark the window dead and release its slot.
+
+    wm_should_close(win)
+        Returns 1 and clears the flag if the user clicked the [X]
+        button since the last call.  Poll this in your event loop.
+
+TEXT OUTPUT
+    wm_print(win, str)
+        Append str to the window's ring buffer.  Newlines wrap the
+        text.  Overflow discards the oldest characters.
+
+    wm_printf(win, fmt, ...)
+        printf-style helper.  Supports: %s %d %x %c %%.
+        Max 256 bytes per call.
+
+    wm_clear_text(win)
+        Clear the entire terminal ring buffer.
+
+CANVAS DRAWING
+    All coordinates are relative to the window's client area (top-left
+    of the area below the title bar, i.e. (0,0) = first usable pixel).
+
+    WM_RGB(r, g, b)   — build a 32-bit 0x00RRGGBB colour
+    WM_BLACK / WM_WHITE / WM_GREEN / WM_BLUE / WM_RED / WM_GREY etc.
+
+    wm_fill_rect(win, x, y, w, h, colour)
+        Fill a solid rectangle.
+
+    wm_draw_rect(win, x, y, w, h, colour)
+        Draw a 1-px hollow border rectangle.
+
+    wm_draw_char(win, x, y, ch, fg, bg)
+        Draw a single 8x16 character.
+
+    wm_draw_string(win, x, y, str, fg, bg)
+        Draw a left-to-right string of 8x16 characters.
+
+    wm_put_pixel(win, x, y, colour)
+        Set a single pixel.
+
+INPUT
+    wm_poll_key()
+        Returns the next character from the keyboard FIFO, or 0 if empty.
+        Ctrl-C is 0x03.  Backspace is 0x08.  Enter is 0x0D.
+
+    wm_poll_mouse(win, *dx, *dy, *buttons, *cx, *cy)
+        Consume one mouse event.  Returns 1 if an event was available.
+        dx/dy: motion delta.  buttons: bit0=left, bit1=right, bit2=mid.
+        cx/cy: cursor position relative to the client origin.
+
+EXAMPLE
+    /* Open a 400x300 canvas window */
+    wm_win_t *w = wm_open_ex("My App", 100, 80, 400, 300, WM_FLAG_CANVAS);
+    if(!w) { terminal_printf("wm_open failed\n"); return; }
+
+    /* Draw a blue rectangle */
+    wm_fill_rect(w, 10, 10, 200, 100, WM_BLUE);
+    wm_draw_string(w, 14, 50, "Hello, stinger!", WM_WHITE, WM_BLUE);
+
+    /* Event loop */
+    while(!wm_should_close(w)){
+        char k = wm_poll_key();
+        if(k == 27) break;   /* ESC */
+        /* your logic here */
+    }
+    wm_close(w);
+
+SEE ALSO
+    yaoigui(man), gl(man), kmalloc(man), serial(man)
+
+FILES
+    shell/wm.h   — public API header
+    shell/wm.c   — implementation
+
+

@@ -1,0 +1,106 @@
+# stinger OS Primitives for Network and Kernel Operations
+
+This file lists the inferred primitives available in stinger OS,
+based on their usage in modules like net/dhcp_client.c.
+
+--- Network Primitives (from drivers/net.h) ---
+
+/**
+ * @brief Sends a raw UDP packet.
+ * @param dest_ip Destination IP address (e.g., as a uint32_t or struct in_addr).
+ * @param dest_port Destination port number.
+ * @param src_port Source port number.
+ * @param payload Pointer to the data buffer to send.
+ * @param payload_len Length of the payload in bytes.
+ * @return 0 on success, negative on error.
+ */
+int net_send_udp_raw(void* dest_ip, uint16_t dest_port, uint16_t src_port, const void* payload, size_t payload_len);
+
+/**
+ * @brief Receives a raw UDP packet.
+ * @param src_ip_out Pointer to store the source IP address.
+ * @param src_port_out Pointer to store the source port number.
+ * @param buffer Pointer to the buffer where received data will be stored.
+ * @param buffer_len Maximum size of the buffer.
+ * @return The number of bytes received, or negative on error.
+ */
+int net_recv_udp_raw(void* src_ip_out, uint16_t* src_port_out, void* buffer, size_t buffer_len);
+
+// Note: The exact types for IP addresses (e.g., void*, uint32_t, struct in_addr)
+// would need to be defined elsewhere, likely in a common network header.
+// For simplicity here, 'void*' is used as a placeholder if the specific type is unknown.
+
+
+--- Kernel Primitives (from kernel/kernel.h) ---
+
+/**
+ * @brief Gets the current system tick count.
+ * @return The number of system ticks.
+ */
+uint64_t get_ticks();
+
+/**
+ * @brief Pauses execution for a specified duration in milliseconds.
+ * @param milliseconds The duration to sleep in milliseconds.
+ */
+void sleep_ms(uint32_t milliseconds);
+
+
+--- Memory Allocation Primitives (from kernel/kmalloc.h) ---
+
+/**
+ * @brief Allocates a block of memory of the specified size from the kernel heap.
+ * @param size The number of bytes to allocate.
+ * @return A pointer to the allocated memory block, or NULL if allocation fails.
+ */
+void* kmalloc(size_t size);
+
+/**
+ * @brief Frees a block of memory previously allocated by kmalloc.
+ * @param ptr A pointer to the memory block to free.
+ */
+void kfree(void* ptr);
+
+
+--- Terminal/Output Primitives (from kernel/terminal.h) ---
+
+/**
+ * @brief Formatted output to the terminal, similar to printf.
+ * @param format The format string.
+ * @param ... Arguments for the format string.
+ * @return The number of characters printed, or a negative value on error.
+ */
+int terminal_printf(const char* format, ...);
+
+
+--- Aliases used in network code ---
+
+// printf is aliased to terminal_printf
+// #define printf terminal_printf
+
+// fprintf is also aliased to terminal_printf
+// #define fprintf terminal_printf
+
+// stderr is redirected or treated as NULL for printing errors to the terminal
+// #define stderr NULL
+
+// perror is a custom implementation using terminal_printf
+// #define perror(msg) terminal_printf("Error: %s
+", msg)
+
+
+--- Standard Integer and Size Types ---
+// These are assumed to be available, typically from <stdint.h> and <stddef.h>
+
+typedef unsigned char uint8_t;
+typedef unsigned short uint16_t;
+typedef unsigned int uint32_t;
+typedef unsigned long long uint64_t; // Assuming 64-bit ticks
+
+typedef signed char int8_t;
+typedef signed short int16_t;
+typedef signed int int32_t;
+
+typedef unsigned long size_t; // Standard size type
+
+

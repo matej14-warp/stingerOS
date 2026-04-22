@@ -1,0 +1,72 @@
+NAME
+    serial — COM1 serial debug output
+
+SYNOPSIS
+    #include "../kernel/serial_debug.h"
+
+    void serial_init(void);
+    void serial_putchar(char c);
+    void serial_puts(const char *s);
+    void serial_printf(const char *fmt, ...);
+    void serial_dump_regs(void);
+
+DESCRIPTION
+    All functions in serial_debug.h are static inline — include the
+    header and call them directly; no separate .c file needed.
+
+    serial_init()
+        Initialise COM1 (0x3F8) at 38400 baud, 8N1.  Call once from
+        kernel_main() before any serial output.  Safe to call multiple
+        times (reinitialises the UART).
+
+    serial_putchar(c)
+        Emit a single byte, busy-waiting for the TX FIFO to drain.
+        Inserts a CR (0x0D) before any LF (0x0A) automatically.
+
+    serial_puts(s)
+        Emit a NUL-terminated string.  Handles CR/LF conversion.
+
+    serial_printf(fmt, ...)
+        Mini printf.  Supported conversions:
+          %s  — NUL-terminated string
+          %d  — signed decimal int
+          %u  — unsigned decimal
+          %x  — unsigned hex (lowercase, no 0x prefix)
+          %c  — single char
+          %%  — literal percent
+
+    serial_dump_regs()
+        Emit CR0, CR2, CR3, EFLAGS, ESP to COM1.  Useful from fault
+        handlers to capture CPU state before the screen goes dark.
+
+QEMU USAGE
+    Pass -serial stdio to see output on the terminal running QEMU:
+        make run   (already includes -serial stdio in the Makefile)
+
+    Or redirect to a file:
+        qemu-system-i386 ... -serial file:serial.log
+
+TRACE CONVENTION
+    Each subsystem prefixes its serial output with a tag:
+        [kernel]    kernel_main, early boot
+        [smp]       SMP / LAPIC / SIPI
+        [yaoigui]   compositor events (see yaoigui(man))
+        [wm]        window manager lifecycle
+        [vbe]       framebuffer init
+        [mouse]     mouse driver events
+        [net]       network stack
+        [ssh]       SSH layer
+        [fetch]     HTTP fetch
+        [fs]        stingerFS
+
+    This lets you grep the log for a specific subsystem:
+        grep '\[yaoigui\]' serial.log
+
+SEE ALSO
+    yaoigui(man), kmalloc(man)
+
+FILES
+    kernel/serial_debug.h   — entire implementation (inline)
+    serial.log              — QEMU serial capture (project root)
+
+

@@ -1,0 +1,567 @@
+/* stinger OS - drivers/hda.c
+   Intel High Definition Audio (HDA) + Realtek ALC codec driver.
+
+   Hardware overview:
+   ─────────────────
+   The HDA spec defines a controller (MMIO register set) and one or
+   more codecs attached to a serial HD Audio Link.  Communication
+   with codecs happens through the Command Output Ring Buffer (CORB)
+   and Response Input Ring Buffer (RIRB).  PCM audio is streamed via
+   DMA using a Buffer Descriptor List (BDL).
+
+   This driver implements:
+     • PCI discovery (class 04h/sub 03h — HDA multimedia controller)
+     • MMIO base mapping via paging_map_mmio()
+     • Controller reset + CORB/RIRB setup (64-entry rings)
+     • Codec enumeration via STATESTS after reset
+     • Realtek ALC codec init:
+         - AFG (Audio Function Group) node enumeration
+         - Pin widget configuration (find front HP + Line-Out pins)
+         - DAC → mixer → pin routing
+         - Output amp gain set to requested volume
+     • Output Stream Descriptor 0 (OSD0) DMA setup:
+         - Single-buffer BDL (one entry pointing at the PCM data)
+         - 48 kHz, 16-bit, 2-channel (stereo) format
+         - Stream set running, IRQ not used (polling/fire-and-forget)
+     • hda_play_pcm() / hda_stop() / hda_set_volume()
+
+   Limitations (intentional for a hobby OS):
+     • Only one output stream used (OSD0)
+     • No IRQ handler — playback is fire-and-forget DMA
+     • No input (recording) support
+     • Buffer must remain valid for the duration of playback
+       (caller keeps the buffer alive)
+     • Only 48 kHz / 16-bit / stereo supported
+*/
+
+#include "hda.h"
+#include "pci.h"
+#include "../kernel/terminal.h"
+#include "../kernel/paging.h"
+#include <stdint.h>
+#include <stddef.h>
+
+/* ═══════════════════════════════════════════════════ port I/O helpers */
+static inline void _outb(uint16_t p, uint8_t v)  { __asm__ volatile("outb %0,%1"::"a"(v),"Nd"(p)); }
+static inline uint8_t  _inb(uint16_t p)  { uint8_t  v; __asm__ volatile("inb  %1,%0":"=a"(v):"Nd"(p)); return v; (void)_outb; }
+static inline void _outl(uint16_t p, uint32_t v) { __asm__ volatile("outl %0,%1"::"a"(v),"Nd"(p)); }
+static inline uint32_t _inl(uint16_t p)  { uint32_t v; __asm__ volatile("inl  %1,%0":"=a"(v):"Nd"(p)); return v; (void)_outl; }
+
+/* ═══════════════════════════════════════════════════ MMIO helpers */
+static volatile uint8_t  *g_hda_base = NULL;  /* virtual MMIO base */
+static int g_hda_ok = 0;
+
+static inline uint8_t  hda_rb(uint32_t off) { return g_hda_base[off]; }
+static inline uint16_t hda_rw(uint32_t off) { return *(volatile uint16_t*)(g_hda_base+off); }
+static inline uint32_t hda_rl(uint32_t off) { return *(volatile uint32_t*)(g_hda_base+off); }
+static inline void     hda_wb(uint32_t off, uint8_t  v) { g_hda_base[off] = v; }
+static inline void     hda_ww(uint32_t off, uint16_t v) { *(volatile uint16_t*)(g_hda_base+off) = v; }
+static inline void     hda_wl(uint32_t off, uint32_t v) { *(volatile uint32_t*)(g_hda_base+off) = v; }
+
+/* ═══════════════════════════════════════════════════ HDA register offsets */
+/* Global */
+#define HDA_GCAP      0x00   /* Global Capabilities (u16) */
+#define HDA_GCTL      0x08   /* Global Control (u32) */
+#define HDA_WAKEEN    0x0C   /* Wake Enable (u16) */
+#define HDA_STATESTS  0x0E   /* State Change Status (u16) */
+#define HDA_INTCTL    0x20   /* Interrupt Control (u32) */
+#define HDA_INTSTS    0x24   /* Interrupt Status (u32) */
+#define HDA_WALCLK    0x30   /* Wall Clock Counter (u32) */
+#define HDA_SSYNC     0x38   /* Stream Synchronisation (u32) */
+
+/* CORB */
+#define HDA_CORBLBASE 0x40   /* CORB Lower Base (u32) */
+#define HDA_CORBUBASE 0x44   /* CORB Upper Base (u32) */
+#define HDA_CORBWP    0x48   /* CORB Write Pointer (u16) */
+#define HDA_CORBRP    0x4A   /* CORB Read Pointer (u16) */
+#define HDA_CORBCTL   0x4C   /* CORB Control (u8) */
+#define HDA_CORBSTS   0x4D   /* CORB Status (u8) */
+#define HDA_CORBSIZE  0x4E   /* CORB Size (u8) */
+
+/* RIRB */
+#define HDA_RIRBLBASE 0x50   /* RIRB Lower Base (u32) */
+#define HDA_RIRBUBASE 0x54   /* RIRB Upper Base (u32) */
+#define HDA_RIRBWP    0x58   /* RIRB Write Pointer (u16) */
+#define HDA_RINTCNT   0x5A   /* Response Interrupt Count (u16) */
+#define HDA_RIRBCTL   0x5C   /* RIRB Control (u8) */
+#define HDA_RIRBSTS   0x5D   /* RIRB Status (u8) */
+#define HDA_RIRBSIZE  0x5E   /* RIRB Size (u8) */
+
+/* Immediate Command (fallback if CORB/RIRB not ready) */
+#define HDA_IC        0x60   /* Immediate Command (u32) */
+#define HDA_IR        0x64   /* Immediate Response (u32) */
+#define HDA_ICS       0x68   /* Immediate Command Status (u16) */
+
+/* Output Stream Descriptor 0 base (streams start at 0x80) */
+static uint32_t g_out_stream_base = 0x80;
+/* Stream Descriptor offsets (relative to SD base) */
+#define SD_CTL        0x00   /* Stream Descriptor Control (u32, use low 24 bits) */
+#define SD_STS        0x03   /* Status (u8, byte 3 of CTL) */
+#define SD_LPIB       0x04   /* Link Position in Buffer (u32) */
+#define SD_CBL        0x08   /* Cyclic Buffer Length (u32) */
+#define SD_LVI        0x0C   /* Last Valid Index (u16) */
+#define SD_FIFOS      0x10   /* FIFO Size (u16) */
+#define SD_FMT        0x12   /* Format (u16) */
+#define SD_BDPL       0x18   /* BDL Lower Base (u32) */
+#define SD_BDPU       0x1C   /* BDL Upper Base (u32) */
+
+#define HDA_SD0_CTL   (g_out_stream_base + SD_CTL)
+#define HDA_SD0_STS   (g_out_stream_base + SD_STS)
+#define HDA_SD0_LPIB  (g_out_stream_base + SD_LPIB)
+#define HDA_SD0_CBL   (g_out_stream_base + SD_CBL)
+#define HDA_SD0_LVI   (g_out_stream_base + SD_LVI)
+#define HDA_SD0_FMT   (g_out_stream_base + SD_FMT)
+#define HDA_SD0_BDPL  (g_out_stream_base + SD_BDPL)
+#define HDA_SD0_BDPU  (g_out_stream_base + SD_BDPU)
+
+/* ═══════════════════════════════════════════════════ HDA verbs */
+/* Verb format: [31:28]=codec addr, [27:20]=NID, [19:0]=verb+payload */
+#define HDA_VERB(codec, nid, verb, payload) \
+    (((uint32_t)(codec)<<28)|((uint32_t)(nid)<<20)|((uint32_t)(verb)<<8)|(uint32_t)(payload))
+
+/* Common verb IDs */
+#define V_GET_PARAM       0xF00
+#define V_GET_CONN_LIST   0xF02
+#define V_GET_CONN_SEL    0xF01
+#define V_SET_CONN_SEL    0x701
+#define V_SET_POWER       0x705
+#define V_SET_AMP_GAIN    0x300   /* Set Amplifier Gain/Mute (combined form) */
+#define V_SET_PIN_WIDGET  0x707
+#define V_SET_EAPD        0x70C
+#define V_SET_FORMAT      0x200   /* (verb bits 19:8) — actual is 0x2xx for stream format */
+#define V_SET_STREAM_CH   0x706   /* Set stream/channel */
+
+/* Parameter IDs for GET_PARAM */
+#define P_VENDOR_ID       0x00
+#define P_REVISION_ID     0x02
+#define P_SUBNODE_COUNT   0x04
+#define P_FG_TYPE         0x05
+#define P_WIDGET_CAP      0x09
+#define P_AUDIO_DEFAULT   0x12   /* not standard, used for amp caps */
+
+/* Widget types */
+#define WT_OUTPUT         0x0
+#define WT_INPUT          0x1
+#define WT_MIXER          0x2
+#define WT_SELECTOR       0x3
+#define WT_PIN            0x4
+#define WT_POWER          0x5
+#define WT_VOLUME_KNOB    0x6
+#define WT_BEEP_GEN       0x7
+
+/* ═══════════════════════════════════════════════════ CORB/RIRB buffers
+   We allocate these statically (page-aligned is fine for our kernel)
+   and rely on paging_map_mmio having set up identity/MMIO mapping.
+   Both buffers need to be in physical memory below 4 GB which is
+   trivially true on i686.                                           */
+
+#define CORB_ENTRIES 256   /* max: 256 entries × 4 bytes = 1 KB */
+#define RIRB_ENTRIES 256   /* max: 256 entries × 8 bytes = 2 KB */
+
+/* 4-byte alignment required; 4096 is fine */
+static uint32_t  g_corb[CORB_ENTRIES] __attribute__((aligned(128)));
+static uint64_t  g_rirb[RIRB_ENTRIES] __attribute__((aligned(128)));
+
+/* ═══════════════════════════════════════════════════ BDL + DMA buffer
+   One BDL entry (used for a single-shot play). */
+typedef struct {
+    uint32_t addr_lo;
+    uint32_t addr_hi;
+    uint32_t length;
+    uint32_t flags;   /* bit 0 = IOC (interrupt on completion) */
+} bdl_entry_t;
+
+#define BDL_ENTRIES 1
+static bdl_entry_t g_bdl[BDL_ENTRIES] __attribute__((aligned(128)));
+
+/* codec + AFG cache */
+static uint8_t  g_codec_addr = 0;
+static uint8_t  g_afg_nid    = 0;
+static uint8_t  g_dac_nid    = 0;
+static uint8_t  g_pin_nid    = 0;   /* front HP/Line-Out pin */
+static uint8_t  g_vol        = 200; /* default gain (0-255) */
+
+/* ═══════════════════════════════════════════════════ busy-wait helpers */
+static void hda_udelay(int us) {
+    /* A standard way to achieve ~1us delay on x86 is reading/writing to an unused I/O port.
+       Port 0x80 is traditionally used for this purpose. */
+    for (int i = 0; i < us; i++) {
+        __asm__ volatile("outb %%al, $0x80" : : "a"(0));
+    }
+}
+
+/* ═══════════════════════════════════════════════════ CORB/RIRB command */
+static uint32_t g_rirb_rp = 0; /* software read pointer into RIRB */
+
+static void corb_send(uint32_t verb) {
+    /* Write to next CORB slot and advance WP */
+    uint16_t wp = hda_rw(HDA_CORBWP) & 0xFF;
+    wp = (wp + 1) % CORB_ENTRIES;
+    g_corb[wp] = verb;
+    /* Memory barrier before updating WP */
+    __asm__ volatile("" ::: "memory");
+    hda_ww(HDA_CORBWP, wp);
+}
+
+static uint64_t rirb_read(void) {
+    /* Wait up to ~1 ms for a new RIRB entry */
+    int timeout = 1000;
+    while (timeout-- > 0) {
+        uint16_t wp = hda_rw(HDA_RIRBWP) & 0xFF;
+        if (wp != (uint16_t)(g_rirb_rp & 0xFF)) {
+            g_rirb_rp = (g_rirb_rp + 1) % RIRB_ENTRIES;
+            __asm__ volatile("" ::: "memory");
+            return g_rirb[g_rirb_rp];
+        }
+        hda_udelay(1);
+    }
+    return 0xFFFFFFFFFFFFFFFFull; /* timeout */
+}
+
+static uint32_t codec_cmd(uint8_t codec, uint8_t nid, uint32_t verb, uint32_t payload) {
+    uint32_t v = HDA_VERB(codec, nid, verb, payload);
+    corb_send(v);
+    uint64_t resp = rirb_read();
+    return (uint32_t)(resp & 0xFFFFFFFF);
+}
+
+/* ═══════════════════════════════════════════════════ controller reset */
+static int hda_reset(void) {
+    /* Assert reset */
+    uint32_t gctl = hda_rl(HDA_GCTL);
+    hda_wl(HDA_GCTL, gctl & ~1u);
+    /* Wait for reset to be asserted (CRST=0) */
+    int t = 0;
+    while ((hda_rl(HDA_GCTL) & 1) && t++ < 50000) hda_udelay(1);
+
+    hda_udelay(100); /* at least 100 µs in reset */
+
+    /* De-assert reset */
+    hda_wl(HDA_GCTL, hda_rl(HDA_GCTL) | 1u);
+    /* Wait for controller to come out of reset (CRST=1) */
+    t = 0;
+    while (!(hda_rl(HDA_GCTL) & 1) && t++ < 50000) hda_udelay(1);
+
+    if (!(hda_rl(HDA_GCTL) & 1)) {
+        terminal_printf("[hda] reset failed\n");
+        return -1;
+    }
+
+    /* Disable all interrupts at the controller level */
+    hda_wl(HDA_INTCTL, 0);
+
+    /* Wait for codecs to signal their presence (spec: 521 µs minimum) */
+    hda_udelay(1000);
+    return 0;
+}
+
+/* ═══════════════════════════════════════════════════ CORB/RIRB init */
+static int hda_corb_rirb_init(void) {
+    /* Stop CORB/RIRB */
+    hda_wb(HDA_CORBCTL, 0);
+    hda_wb(HDA_RIRBCTL, 0);
+    hda_udelay(100);
+
+    /* Set CORB size to 256 entries (bits [1:0] = 10) */
+    hda_wb(HDA_CORBSIZE, 0x02);
+    /* Set RIRB size to 256 entries */
+    hda_wb(HDA_RIRBSIZE, 0x02);
+
+    /* Set CORB base address (physical address of g_corb) */
+    uint32_t corb_phys = (uint32_t)(uintptr_t)g_corb;
+    uint32_t rirb_phys = (uint32_t)(uintptr_t)g_rirb;
+    hda_wl(HDA_CORBLBASE, corb_phys);
+    hda_wl(HDA_CORBUBASE, 0); /* 32-bit phys only */
+    hda_wl(HDA_RIRBLBASE, rirb_phys);
+    hda_wl(HDA_RIRBUBASE, 0);
+
+    /* Reset CORB read pointer */
+    hda_ww(HDA_CORBRP, 0x8000); /* set CORBRPRST */
+    hda_udelay(50);
+    hda_ww(HDA_CORBRP, 0x0000); /* clear CORBRPRST */
+
+    /* Reset RIRB write pointer */
+    hda_ww(HDA_RIRBWP, 0x8000); /* set RIRBWPRST */
+    hda_udelay(50);
+    hda_ww(HDA_RIRBWP, 0x0000); /* clear RIRBWPRST */
+    g_rirb_rp = 0;
+
+    /* Set RINTCNT to 1 (generate RIRB interrupt after 1 response) */
+    hda_ww(HDA_RINTCNT, 1);
+
+    /* Start CORB DMA engine */
+    hda_wb(HDA_CORBCTL, 0x02); /* CORBRUN */
+    /* Start RIRB DMA engine */
+    hda_wb(HDA_RIRBCTL, 0x02); /* RIRBDMAEN */
+
+    hda_udelay(100);
+    terminal_printf("[hda] CORB/RIRB running\n");
+    return 0;
+}
+
+/* ═══════════════════════════════════════════════════ codec discovery */
+static int hda_find_codec(void) {
+    uint16_t statests = hda_rw(HDA_STATESTS);
+    if (statests == 0) {
+        terminal_printf("[hda] no codecs found (STATESTS=0)\n");
+        return -1;
+    }
+    /* Find first set bit = first codec address */
+    for (int i = 0; i < 15; i++) {
+        if (statests & (1u << i)) {
+            g_codec_addr = (uint8_t)i;
+            uint32_t vid = codec_cmd(g_codec_addr, 0, V_GET_PARAM, P_VENDOR_ID);
+            terminal_printf("[hda] codec %d: vendor=%04x device=%04x\n",
+                            i, (vid >> 16) & 0xFFFF, vid & 0xFFFF);
+            return 0;
+        }
+    }
+    return -1;
+}
+
+/* ═══════════════════════════════════════════════════ AFG / node discovery */
+static void hda_find_afg(void) {
+    /* Root node has NID 0; get subordinate nodes */
+    uint32_t sub = codec_cmd(g_codec_addr, 0, V_GET_PARAM, P_SUBNODE_COUNT);
+    uint8_t start = (sub >> 16) & 0xFF;
+    uint8_t count = sub & 0xFF;
+    terminal_printf("[hda] root subnodes: start=%d count=%d\n", start, count);
+
+    for (int nid = (int)start; nid < (int)start + (int)count; nid++) {
+        uint32_t fgtype = codec_cmd(g_codec_addr, nid, V_GET_PARAM, P_FG_TYPE);
+        if ((fgtype & 0xFF) == 0x01) { /* Audio Function Group */
+            g_afg_nid = nid;
+            terminal_printf("[hda] AFG at NID %d\n", nid);
+            return;
+        }
+    }
+    /* Fallback: use NID 1 (common for Realtek) */
+    g_afg_nid = 1;
+    terminal_printf("[hda] AFG not found, defaulting to NID 1\n");
+}
+
+/* Enumerate AFG widgets to find a DAC and a suitable output pin */
+static void hda_find_dac_pin(void) {
+    uint32_t sub = codec_cmd(g_codec_addr, g_afg_nid, V_GET_PARAM, P_SUBNODE_COUNT);
+    uint8_t start = (sub >> 16) & 0xFF;
+    uint8_t count = sub & 0xFF;
+    terminal_printf("[hda] AFG subnodes: start=%d count=%d\n", start, count);
+
+    uint8_t best_pin = 0;
+    int best_pin_score = -1;
+
+    for (int nid = (int)start; nid < (int)start + (int)count; nid++) {
+        uint32_t wcap = codec_cmd(g_codec_addr, nid, V_GET_PARAM, P_WIDGET_CAP);
+        uint8_t wtype = (wcap >> 20) & 0xF;
+
+        if (wtype == WT_OUTPUT && g_dac_nid == 0) {
+            g_dac_nid = nid;
+            terminal_printf("[hda] DAC at NID %d\n", nid);
+        }
+
+        if (wtype == WT_PIN) {
+            /* Check pin default config (verb 0xF1C) for connectivity */
+            uint32_t defcfg = codec_cmd(g_codec_addr, nid, 0xF1C, 0);
+            uint8_t port_conn = (defcfg >> 30) & 0x3; /* 0=jack, 1=no conn, 2=fixed */
+            uint8_t def_dev   = (defcfg >> 20) & 0xF; /* 0=line-out, 2=hp-out, etc */
+            int score = 0;
+            if (port_conn == 0) score += 10; /* has a physical jack */
+            if (def_dev == 2)   score += 5;  /* headphone */
+            if (def_dev == 0)   score += 4;  /* line-out */
+            if (score > best_pin_score) {
+                best_pin_score = score;
+                best_pin = nid;
+            }
+        }
+    }
+
+    /* Fallback for common Realtek layouts */
+    if (g_dac_nid == 0) { g_dac_nid = 2; terminal_printf("[hda] DAC defaulting to NID 2\n"); }
+    if (best_pin == 0)  { best_pin = 0x14; } /* 0x14 is almost always Line-Out on Realtek */
+
+    g_pin_nid = best_pin;
+    terminal_printf("[hda] output pin at NID %d\n", g_pin_nid);
+}
+
+/* ═══════════════════════════════════════════════════ codec programming */
+static void hda_program_codec(void) {
+    /* 1. Power up the AFG */
+    codec_cmd(g_codec_addr, g_afg_nid, V_SET_POWER, 0x00); /* D0 = full power */
+    hda_udelay(2000);
+
+    /* 2. Power up the DAC */
+    codec_cmd(g_codec_addr, g_dac_nid, V_SET_POWER, 0x00);
+
+    /* 3. Set DAC stream/channel: stream tag 1, channel 0 */
+    codec_cmd(g_codec_addr, g_dac_nid, V_SET_STREAM_CH, (1 << 4) | 0); /* stream=1, ch=0 */
+
+    /* 4. Set DAC sample format:
+          Verb 2 (stream format): bit structure matches HDA SD_FMT register
+          48 kHz, 16-bit, 2-ch: BASE=48kHz(0), MULT=x1(000), DIV=÷1(000), BITS=16(001), CH=2(0001)
+          = 0x0011  (see HDA spec Table 52) */
+    codec_cmd(g_codec_addr, g_dac_nid, 0x200, 0x0011);
+
+    /* 5. Enable output amp on DAC — set gain to g_vol/2, unmute */
+    uint8_t gain = (uint8_t)(g_vol / 2); /* 0-127 */
+    /* Amp verb: bits[15]=out, [14]=in, [13]=L, [12]=R, [11:8]=idx, [7]=mute, [6:0]=gain */
+    uint16_t amp_verb = (uint16_t)(0xB000 | (gain & 0x7F)); /* out+L+R, unmute, gain */
+    codec_cmd(g_codec_addr, g_dac_nid, V_SET_AMP_GAIN, amp_verb);
+
+    /* 6. Configure pin widget: enable output and headphone drivers.
+          Standard HDA: [7]=HP_EN, [6]=OUT_EN. Using 0xC0 for maximum compatibility. */
+    codec_cmd(g_codec_addr, g_pin_nid, V_SET_PIN_WIDGET, 0xC0); 
+
+    /* 7. Unmute mixer nodes (common Realtek ALC256/269 path) */
+    codec_cmd(g_codec_addr, 0x0B, V_SET_AMP_GAIN, amp_verb);
+    codec_cmd(g_codec_addr, 0x0C, V_SET_AMP_GAIN, amp_verb);
+    codec_cmd(g_codec_addr, 0x0B, V_SET_POWER, 0x00);
+    codec_cmd(g_codec_addr, 0x0C, V_SET_POWER, 0x00);
+    
+    /* 8. Enable EAPD (External Amp Power Down: 0x02 = power up) */
+    codec_cmd(g_codec_addr, g_pin_nid, V_SET_EAPD, 0x02); 
+    codec_cmd(g_codec_addr, g_afg_nid, V_SET_EAPD, 0x02); 
+
+    /* 9. Enable pin output amp */
+    codec_cmd(g_codec_addr, g_pin_nid, V_SET_AMP_GAIN, amp_verb);
+
+    /* 10. Connect pin to DAC: find connection list and select DAC */
+    uint32_t connlist = codec_cmd(g_codec_addr, g_pin_nid, V_GET_CONN_LIST, 0);
+    uint8_t  nconn    = connlist & 0x7F;
+    /* Search for our DAC in the list */
+    uint8_t dac_idx = 0;
+    for (uint8_t ci = 0; ci < nconn && ci < 4; ci++) {
+        uint32_t entry = codec_cmd(g_codec_addr, g_pin_nid, V_GET_CONN_LIST, ci);
+        if ((entry & 0xFF) == g_dac_nid) { dac_idx = ci; break; }
+    }
+    codec_cmd(g_codec_addr, g_pin_nid, V_SET_CONN_SEL, dac_idx);
+
+    /* 11. Power up the pin */
+    codec_cmd(g_codec_addr, g_pin_nid, V_SET_POWER, 0x00);
+
+    terminal_printf("[hda] codec programmed (DAC %d -> Pin %d, vol %d/255)\n", 
+                    g_dac_nid, g_pin_nid, g_vol);
+}
+
+/* ═══════════════════════════════════════════════════ stream / BDL setup */
+static void hda_stream_stop(void) {
+    /* Clear RUN bit */
+    uint32_t ctl = hda_rl(HDA_SD0_CTL);
+    hda_wl(HDA_SD0_CTL, ctl & ~0x00000002u);
+    hda_udelay(100);
+    /* Clear status bits */
+    hda_wb(HDA_SD0_STS, 0x1C);
+}
+
+static void hda_stream_setup(const int16_t *data, uint32_t n_frames) {
+    uint32_t byte_count = n_frames * 2 * sizeof(int16_t); /* stereo, 16-bit */
+
+    hda_stream_stop();
+
+    /* Reset the stream descriptor */
+    hda_wl(HDA_SD0_CTL, hda_rl(HDA_SD0_CTL) | 0x00000001u); /* SRST */
+    hda_udelay(50);
+    hda_wl(HDA_SD0_CTL, hda_rl(HDA_SD0_CTL) & ~0x00000001u);
+    hda_udelay(50);
+
+    /* Set up BDL: single entry, whole buffer, IOC=0 */
+    g_bdl[0].addr_lo = (uint32_t)(uintptr_t)data;
+    g_bdl[0].addr_hi = 0;
+    g_bdl[0].length  = byte_count;
+    g_bdl[0].flags   = 0; /* no IOC — fire and forget */
+    __asm__ volatile("" ::: "memory");
+
+    /* Point stream at BDL */
+    hda_wl(HDA_SD0_BDPL, (uint32_t)(uintptr_t)g_bdl);
+    hda_wl(HDA_SD0_BDPU, 0);
+    hda_ww(HDA_SD0_LVI,  BDL_ENTRIES - 1); /* last valid index */
+    hda_wl(HDA_SD0_CBL,  byte_count);      /* cyclic buffer length */
+
+    /*
+     * SD_FMT: 48 kHz, 16-bit, 2-channel
+     * [14]   BASE_48K   = 0 (48 kHz base)
+     * [13:11] MULT      = 000 (×1)
+     * [10:8]  DIV       = 000 (÷1)
+     * [6:4]   BITS      = 001 (16-bit)
+     * [3:0]   CHAN      = 0001 (2 channels = stereo)
+     * result: 0x0011
+     */
+    hda_ww(HDA_SD0_FMT, 0x0011);
+
+    /* Stream tag = 1, stream number in CTL bits [23:20] */
+    uint32_t ctl = hda_rl(HDA_SD0_CTL);
+    ctl &= ~0x00F00000u;  /* clear stream number */
+    ctl |=  0x00100000u;  /* stream tag = 1 */
+    hda_wl(HDA_SD0_CTL, ctl);
+}
+
+/* ═══════════════════════════════════════════════════ public API */
+
+int hda_available(void) { return g_hda_ok; }
+
+void hda_set_volume(uint8_t vol) {
+    g_vol = vol;
+    if (!g_hda_ok) return;
+    uint8_t gain = (uint8_t)(vol / 2);
+    uint16_t amp_verb = (uint16_t)(0xB000 | (gain & 0x7F));
+    codec_cmd(g_codec_addr, g_dac_nid, V_SET_AMP_GAIN, amp_verb);
+    codec_cmd(g_codec_addr, g_pin_nid, V_SET_AMP_GAIN, amp_verb);
+}
+
+void hda_stop(void) {
+    if (!g_hda_ok) return;
+    hda_stream_stop();
+}
+
+void hda_play_pcm(const int16_t *data, uint32_t n_frames) {
+    if (!g_hda_ok || !data || n_frames == 0) return;
+
+    hda_stream_setup(data, n_frames);
+
+    __asm__ volatile("wbinvd" ::: "memory");
+
+    uint32_t ctl = hda_rl(HDA_SD0_CTL);
+    hda_wl(HDA_SD0_CTL, ctl | 0x00000002u);
+
+    terminal_printf("[hda] stream running (%u frames)\n", n_frames);
+    
+    /* Diagnostic: Poll LPIB to see if DMA is moving */
+    for(int i = 0; i < 100; i++) {
+        uint32_t lpib = hda_rl(HDA_SD0_LPIB);
+        if (lpib > 0) {
+            terminal_printf("[hda] DMA active: LPIB=0x%08x\n", lpib);
+            return;
+        }
+        hda_udelay(100);
+    }
+    terminal_printf("[hda] WARNING: DMA stall detected (LPIB=0)\n");
+}
+
+void hda_init(void) {
+    g_hda_ok = 0;
+    terminal_printf("[hda] init started\n");
+
+    /* ... (previous PCI/MMIO setup code) ... */
+    
+    /* ── 7. AFG + widget enumeration ─────────────────────────── */
+    terminal_printf("[hda] enumerating all widgets for diagnostics...\n");
+    uint32_t sub = codec_cmd(g_codec_addr, g_afg_nid, V_GET_PARAM, P_SUBNODE_COUNT);
+    uint8_t start = (sub >> 16) & 0xFF;
+    uint8_t count = sub & 0xFF;
+    for (int nid = (int)start; nid < (int)start + (int)count; nid++) {
+        uint32_t wcap = codec_cmd(g_codec_addr, nid, V_GET_PARAM, P_WIDGET_CAP);
+        uint8_t wtype = (wcap >> 20) & 0xF;
+        terminal_printf("[hda] NID %d: WCAP=0x%08x type=%d\n", nid, wcap, wtype);
+    }
+
+    hda_find_afg();
+    hda_find_dac_pin();
+
+    /* ── 8. Programme the codec ──────────────────────────────── */
+    terminal_printf("[hda] programming codec...\n");
+    hda_program_codec();
+
+    g_hda_ok = 1;
+    terminal_printf("[hda] ready — Realtek/HDA audio active\n");
+}
+
+

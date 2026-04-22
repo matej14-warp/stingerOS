@@ -1,0 +1,137 @@
+NAME
+    gl — stingerGL software 3D renderer
+
+SYNOPSIS
+    #include "../shell/gl.h"
+    #include "../shell/wm.h"
+
+    int  sgl_init(width, height);
+    void sgl_destroy(void);
+
+    void sgl_present(void);                  /* standalone only    */
+    void sgl_present_to_win(wm_win_t *win);  /* YaoiGUI-safe       */
+
+    void glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+    void glClearColor(r, g, b, a);
+    void glViewport(x, y, w, h);
+    void glEnable / glDisable(GL_DEPTH_TEST | GL_CULL_FACE);
+
+    GLuint glCreateShader / glCreateProgram / glLinkProgram ...
+    void   glUniformMatrix4fv(loc, 1, GL_FALSE, mat4);
+    void   glUniform1i(loc, texture_unit);
+
+    void glGenBuffers / glBindBuffer / glBufferData / glDeleteBuffers
+    void glVertexAttribPointer / glEnableVertexAttribArray
+    void glDrawArrays(GL_TRIANGLES, first, count);
+
+    void glGenTextures / glBindTexture / glTexImage2D / glTexParameteri
+
+DESCRIPTION
+    stingerGL is a pure-software WebGL-flavoured 3D rasteriser.
+    It runs entirely on the BSP CPU, outputs to an off-screen colour
+    buffer, and presents via the VBE back-buffer.
+
+    The API is intentionally close to WebGL/OpenGL-ES so porting demos
+    is straightforward.  Shaders are stubbed — there is one hard-coded
+    pipeline: transform by VIEW and PROJECTION matrices, sample texture
+    (nearest-neighbour), apply per-vertex shade multiplier.
+
+COMPOSITOR INTEGRATION (IMPORTANT)
+    sgl_present()
+        Blits the colour buffer to screen at (0,0).
+        ONLY use this when running without YaoiGUI (standalone mode).
+        Calling it inside YaoiGUI will overwrite the compositor's
+        back-buffer and corrupt the desktop.
+
+    sgl_present_to_win(win)
+        Blits into the client area of a YaoiGUI wm window.
+        Clips to client bounds — compositor-safe.
+        Does NOT call vbe_flip(); the compositor does that at ~60 fps.
+        This is what you want 99% of the time.
+
+TYPICAL YAOIGUI APP LOOP
+    wm_win_t *w = wm_open("3D View", 60, 50, 640, 480);
+    int cw = wm_client_width(w);
+    int ch = wm_client_height(w);
+    sgl_init(cw, ch);
+
+    GLuint prog = glCreateProgram();
+    /* set up buffers, textures, attribs ... */
+
+    while (!wm_should_close(w)) {
+        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+
+        /* upload matrices */
+        GLint proj_loc = glGetUniformLocation(prog, "uProjection");
+        GLint view_loc = glGetUniformLocation(prog, "uView");
+        glUniformMatrix4fv(proj_loc, 1, GL_FALSE, my_proj);
+        glUniformMatrix4fv(view_loc, 1, GL_FALSE, my_view);
+
+        glDrawArrays(GL_TRIANGLES, 0, vertex_count);
+
+        sgl_present_to_win(w);   /* <-- compositor-safe */
+        sched_yield();           /* yield so GUI stays responsive */
+    }
+
+    sgl_destroy();
+    wm_close(w);
+
+VERTEX FORMAT
+    Attributes are identified by fixed indices:
+
+    SGL_ATTRIB_POSITION  (0)  — vec3 xyz position
+    SGL_ATTRIB_TEXCOORD  (1)  — vec2 uv texture coords
+    SGL_ATTRIB_SHADE     (2)  — float shade multiplier (0.0-1.0)
+
+    glGetAttribLocation() returns these indices for the standard names:
+      "aPosition" / "position"  → 0
+      "aTexCoord"  / "texCoord" → 1
+      "aShade"     / "shade"    → 2
+
+UNIFORMS
+    SGL_UNIFORM_PROJECTION (0)  "uProjection"  mat4
+    SGL_UNIFORM_VIEW       (1)  "uView"        mat4
+    SGL_UNIFORM_TEXTURE    (2)  "uTexture"     int (texture unit)
+
+MATRICES
+    Column-major 4x4 floats, same layout as OpenGL.
+    Typical setup: projection = perspective, view = camera lookAt.
+    Model transform should be baked into view before uploading.
+
+TEXTURES
+    RGBA 32-bit pixels (R,G,B,A byte order in memory).
+    Power-of-two dimensions recommended.
+    Nearest-neighbour filtering only.
+    Pixels with alpha < 128 are discarded (alpha test blending).
+
+DEPTH BUFFER
+    Uses 1/w (inverse clip-space w) per fragment.
+    Higher value = closer to camera.
+    GL_DEPTH_TEST: enabled by default.
+
+BACK-FACE CULLING
+    Counter-clockwise winding = front face (same as OpenGL default).
+    GL_CULL_FACE: enabled by default.
+
+LIMITS
+    SGL_MAX_TEXTURES   32
+    SGL_MAX_BUFFERS    64
+    SGL_MAX_ATTRIBS     8
+    SGL_MAX_UNIFORMS   16
+
+PERFORMANCE
+    Pixel throughput depends entirely on triangle count and screen area.
+    Rough guidance on QEMU (x86, -m 128M, no KVM):
+      < 500 triangles, 320x240 window  → ~60 fps easily
+      ~2000 triangles, 640x480 window  → ~20-30 fps
+    Enable GL_CULL_FACE and minimise overdraw for best results.
+    Call sched_yield() every frame — one yield per 16ms is sufficient.
+
+SEE ALSO
+    wm(man), sched(man), yaoigui(man)
+
+FILES
+    shell/gl.h  — public API
+    shell/gl.c  — implementation (rasteriser + GL stubs)
+
+

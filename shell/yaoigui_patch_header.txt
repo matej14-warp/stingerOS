@@ -1,0 +1,11 @@
+/* stinger OS - shell/yaoigui.c
+   YaoiGUI v7.0 — Windows 10-style compositor
+   ? Arrow key fix: dokey() buffers 3-byte ESC sequences before dispatching
+   ? Nano: full cursor row/col tracking + line array (no more flat ring)
+   ? New app types: WAPP_MATRIX, WAPP_NYAN, WAPP_PIPES, WAPP_DOOMSCROLL,
+                    WAPP_SPINNING, WAPP_SL, WAPP_RICKROLL, WAPP_WGET,
+                    WAPP_SNAKE, WAPP_TETRIS, WAPP_PONG, WAPP_MINECRAFT
+   ? GUI-native snake/tetris/pong/minecraft via games.c GUI renderers
+   ? Updated smact() / drawwin() / start menu / taskbar icons
+
+

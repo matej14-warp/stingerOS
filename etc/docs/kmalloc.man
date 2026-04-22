@@ -1,0 +1,79 @@
+NAME
+    kmalloc — kernel heap allocator
+
+SYNOPSIS
+    #include "../kernel/kmalloc.h"
+
+    void  *kmalloc(size_t size);
+    void  *kzalloc(size_t size);
+    void  *kmalloc_aligned(size_t size, size_t align);
+    void   kfree(void *ptr);
+    void   kfree_aligned(void *ptr);
+    size_t kheap_free(void);
+
+DESCRIPTION
+    stinger provides a simple first-fit heap allocator that operates
+    on a fixed physical region above the kernel BSS.  There is no virtual
+    memory — all addresses are flat physical.
+
+    kmalloc(size)
+        Allocate at least 'size' bytes.  Returns a pointer aligned to
+        at least 8 bytes.  Returns NULL if the heap is exhausted.
+        Never calls into the kernel scheduler — safe to call from any
+        context including interrupt handlers.
+
+    kzalloc(size)
+        Like kmalloc but zeroes the allocated region before returning.
+
+    kmalloc_aligned(size, align)
+        Allocate 'size' bytes aligned to a power-of-two 'align' boundary.
+        Useful for DMA buffers (typically align=4096 or align=64).
+        MUST be freed with kfree_aligned(), not kfree().
+
+    kfree(ptr)
+        Free a pointer obtained from kmalloc or kzalloc.
+        Passing NULL is safe (no-op).
+        Double-free is NOT detected — avoid it.
+
+    kfree_aligned(ptr)
+        Free a pointer obtained from kmalloc_aligned.
+
+    kheap_free()
+        Return the number of free bytes remaining in the heap.
+        Useful for debugging memory pressure.
+
+MEMORY LAYOUT (approximate)
+    0x00000000 - 0x000FFFFF  Low memory / BIOS / VGA
+    0x00100000 - kernel end  Kernel code + data + BSS
+    kernel end - heap end    kmalloc heap (~8-32 MiB depending on -m flag)
+    VBE base                 Linear framebuffer (hardware assigned)
+
+HEAP SIZE
+    The heap is defined by the linker script (boot/linker.ld).
+    At QEMU default (-m 128M) you have roughly 100+ MiB available.
+    The VBE back buffer for 1920x1080x32 consumes ~8 MiB.
+
+NOTES
+    There is no garbage collection or reference counting.  Every
+    kmalloc() must have exactly one matching kfree().
+
+    kmalloc is NOT thread-safe across cores.  If two cores could
+    call kmalloc concurrently, add a spinlock around the call sites.
+    In the current stinger design the BSP owns all heap allocation.
+
+EXAMPLE
+    size_t before = kheap_free();
+    char *buf = kmalloc(1024);
+    if(!buf){ terminal_printf("out of memory!\n"); return; }
+    /* use buf ... */
+    kfree(buf);
+    terminal_printf("freed %u bytes back\n", (unsigned)(kheap_free()-before));
+
+SEE ALSO
+    serial(man), wm(man)
+
+FILES
+    kernel/kmalloc.h
+    kernel/kmalloc.c
+
+

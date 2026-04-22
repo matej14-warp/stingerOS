@@ -1,0 +1,238 @@
+<html lang="en"><head></head><body class="selection:bg-[var(--accent-pink-white)] selection:text-black"><meta charset="utf-8"/><meta content="width=device-width, initial-scale=1.0" name="viewport"/><title>stinger os</title><script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script><link href="https://fonts.googleapis.com" rel="preconnect"/><link crossorigin="" href="https://fonts.gstatic.com" rel="preconnect"/><link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;700&amp;family=Inter:wght@400;700;900&amp;display=swap" rel="stylesheet"/><link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/><style type="text/tailwindcss">
+        :root {
+            --bg-deep: #0a0a0a;
+            --bg-card: #111111;
+            --accent-pink-white: #fce4ec;--border-muted: #222222;
+            --text-main: #e0e0e0;
+            --text-dim: #666666;
+        }
+        body {
+            background-color: var(--bg-deep);
+            color: var(--text-main);
+            font-family: 'JetBrains Mono', monospace;
+            text-transform: lowercase;
+        }
+        .sans {
+            font-family: 'Inter', sans-serif;
+        }
+        .brutalist-border {
+            border: 1px solid var(--border-muted);
+        }
+        .brutalist-border:hover {
+            border-color: var(--accent-pink-white);
+        }
+        pre {
+            background-color: #000000;
+            padding: 1.5rem;
+            border-left: 2px solid var(--accent-pink-white);
+            overflow-x: auto;
+        }
+        code {
+            font-family: 'JetBrains Mono', monospace;
+        }
+        ::-webkit-scrollbar {
+            width: 4px;
+        }
+        ::-webkit-scrollbar-track {
+            background: #000;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #333;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: var(--accent-pink-white);
+        }
+    </style><div class="fixed left-0 top-0 h-full w-1 bg-[var(--accent-pink-white)] opacity-30"></div>
+<main class="max-w-5xl mx-auto px-8 py-16 lg:py-32">
+<header class="mb-24">
+<div class="flex items-baseline justify-between mb-4">
+<h1 class="sans text-8xl font-black tracking-tighter mb-4 text-white">stinger</h1>
+<span class="text-[var(--accent-pink-white)] text-sm font-bold">v0.4.2-alpha</span>
+</div>
+<p class="text-2xl text-[var(--text-dim)] max-w-2xl leading-relaxed mb-10">
+            a 32-bit module-based operating system. built with <span class="text-white">fetch</span> package management and a custom <span class="text-white">mbf</span> runtime. no bloat. just the kernel and your curiosity.
+        </p>
+<div class="flex flex-wrap gap-4">
+<a class="bg-[var(--accent-pink-white)] text-black px-8 py-4 font-bold text-xl hover:bg-white transition-colors duration-200 flex items-center gap-2" href="https://voided.uk/stinger-latest-indev.iso">
+<span class="material-symbols-outlined font-bold">download</span>
+                download stinger.iso
+            </a>
+<a class="brutalist-border px-8 py-4 font-bold text-xl text-white hover:bg-[var(--border-muted)] transition-colors duration-200" href="https://voided.uk/stinger-latest-indev.zip">
+                view source
+            </a>
+</div>
+<p class="mt-4 text-[var(--text-dim)] text-[8pt]">
+            checksum: 8f9a2c... changes so much i can't be bothered xdd
+        </p>
+</header>
+<section class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-24">
+<div class="brutalist-border p-6 bg-[var(--bg-card)]">
+<h3 class="text-[var(--accent-pink-white)] font-bold mb-2">/architecture</h3>
+<p class="text-sm text-[var(--text-dim)] mb-4">i686-elf monolithic core with stingerfs in-memory tree filesystem.</p>
+<div class="text-[10px] opacity-50">
+                512 max nodes<br/>
+                4mb kernel heap<br/>
+                64 char filenames
+            </div>
+</div>
+<div class="brutalist-border p-6 bg-[var(--bg-card)]">
+<h3 class="text-[var(--accent-pink-white)] font-bold mb-2">/networking</h3>
+<p class="text-sm text-[var(--text-dim)] mb-4">rndis usb driver with native tcp/ip stack support.</p>
+<div class="text-[10px] opacity-50">
+                dhcp / arp / ip<br/>
+                tcp sockets (blocking)<br/>
+                dns a-record resolution
+            </div>
+</div>
+<div class="brutalist-border p-6 bg-[var(--bg-card)]">
+<h3 class="text-[var(--accent-pink-white)] font-bold mb-2">/package-manager</h3>
+<p class="text-sm text-[var(--text-dim)] mb-4">fetch: the world's simplest cdn-based module installer.</p>
+<div class="text-[10px] opacity-50">
+                mbf script execution<br/>
+                zip extraction<br/>
+                bin/ injection
+            </div>
+</div>
+</section>
+<section class="mb-24" id="versions">
+<h2 class="text-3xl font-black text-white mb-8 border-b border-[var(--border-muted)] pb-2">00 version_history</h2>
+<div class="grid grid-cols-1 gap-2">
+<a href="https://voided.uk/stinger.iso">
+<div class="flex items-center justify-between p-4 bg-white/5 border-l-4 border-[var(--accent-pink-white)]">
+<div>
+<span class="text-[var(--accent-pink-white)] font-bold">v4.0</span>
+<span class="ml-4 text-xs text-white bg-pink-900/30 px-2 py-0.5 border border-pink-500/20">latest indev</span>
+</div>
+<span class="text-[var(--text-dim)] text-xs">active development - fetch v3 focus</span>
+</div>
+</a>
+<a href="https://voided.uk/stinger-v3.1-x86.iso">
+<div class="flex items-center justify-between p-4 brutalist-border hover:bg-[var(--bg-card)] transition-colors">
+<span class="text-white font-bold">v3.1</span>
+<span class="text-[var(--text-dim)] text-xs">rndis usb stabilization + sfs rewrite</span>
+</div>
+</a>
+<a href="https://voided.uk/stinger-v3.0-x86.iso">
+<div class="flex items-center justify-between p-4 brutalist-border hover:bg-[var(--bg-card)] transition-colors">
+<span class="text-white font-bold">v3.0</span>
+<span class="text-[var(--text-dim)] text-xs">initial fetch package manager release</span>
+</div>
+</a>
+<a href="https://voided.uk/stinger-v2.0-x86.iso">
+<div class="flex items-center justify-between p-4 brutalist-border hover:bg-[var(--bg-card)] transition-colors">
+<span class="text-white font-bold">v2.0</span>
+<span class="text-[var(--text-dim)] text-xs">mbf script runtime + multi-node filesystem</span>
+</div>
+</a>
+<a href="https://voided.uk/stinger-v1.0-x86.iso">
+<div class="flex items-center justify-between p-4 brutalist-border hover:bg-[var(--bg-card)] transition-colors">
+<span class="text-white font-bold">v1.0</span>
+<span class="text-[var(--text-dim)] text-xs">i686-elf monolithic core + vga text-mode</span>
+</div>
+</a>
+</div>
+</section>
+<section class="mb-24" id="architecture">
+<h2 class="text-3xl font-black text-white mb-8 border-b border-[var(--border-muted)] pb-2">01 architecture_tree</h2>
+<div class="grid grid-cols-1 gap-4">
+<pre class="text-sm leading-relaxed text-[var(--text-main)]">boot/
+  boot.asm          - multiboot2 stub, gdt/idt flush
+  grub.cfg          - grub2 config
+  linker.ld         - loads at 1 mib
+kernel/
+  kernel.c          - kernel_main() init sequence
+  terminal.c        - vga text-mode driver (80x25)
+  descriptor_tables - gdt + idt + pic remap
+  kmalloc.c         - kernel heap allocator
+fs/
+  sfs.c             - stingerfs: in-memory tree
+drivers/
+  keyboard.c        - ps/2 irq1 driver
+  rndis.c           - usb networking protocol
+  net.c             - tcp/ip: arp, dhcp, ip, tcp, http</pre>
+</div>
+</section>
+<section class="mb-24" id="getting-started">
+<div class="flex items-center justify-between mb-8 border-b border-[var(--border-muted)] pb-2">
+<h2 class="text-3xl font-black text-white">02 hardware_flashing</h2>
+<span class="text-[var(--text-dim)] text-xs">estimated time: 5 minutes</span>
+</div>
+<div class="space-y-12">
+<div>
+<h4 class="text-[var(--accent-pink-white)] mb-4 font-bold">&gt; prepare media</h4>
+<p class="text-sm text-[var(--text-dim)] mb-4">grab a high-quality usb flash disk. low-quality drives will fail you. we recommend using 'dd' for the pure approach or 'etcher' if you need a gui.</p>
+</div>
+<div>
+<h4 class="text-[var(--accent-pink-white)] mb-4 font-bold">&gt; flash using dd (unix/macos)</h4>
+<p class="text-sm text-[var(--text-dim)] mb-2">identify your drive first. don't wipe your primary disk. check twice.</p>
+<pre class="text-xs"># find your device (e.g., /dev/sdb or /dev/disk4)
+lsblk 
+# write the iso to the disk
+sudo dd if=stinger.iso of=/dev/sdX bs=4M status=progress oflag=sync</pre>
+</div>
+<div>
+<h4 class="text-[var(--accent-pink-white)] mb-4 font-bold">&gt; flash using windows</h4>
+<p class="text-sm text-[var(--text-dim)] mb-4">
+    yeah yeah, you’re on windows. fine. don’t screw this up.
+    use <span class="text-white">rufus</span> or <span class="text-white">balena etcher</span>.
+</p>
+
+<pre class="text-xs"># rufus method (recommended)
+1. plug in your usb drive
+2. open rufus
+3. select your usb device (double check it's not your main disk)
+4. select stinger.iso
+5. partition scheme: MBR
+6. target system: BIOS (or UEFI-CSM)
+7. click START and wait
+
+# balena etcher method (simpler)
+1. open etcher
+2. select stinger.iso
+3. select target usb
+4. click flash
+</pre>
+
+<p class="text-[10px] text-[var(--text-dim)] opacity-70 mt-2">
+    * rufus may ask about iso/dd mode — pick <span class="text-white">dd mode</span>.<br/>
+    * windows might hide drives — triple check before flashing.<br/>
+    * if you wipe your main disk, that's on you.
+</p>
+</div>
+<div>
+<h4 class="text-[var(--accent-pink-white)] mb-4 font-bold">&gt; boot real hardware</h4>
+<p class="text-sm text-[var(--text-dim)] mb-4">plug the flash disk into your target x86 machine. enter bios/uefi and select the usb device. ensure legacy boot is enabled if needed. don't fuck it up.</p>
+<div class="text-[10px] text-[var(--text-dim)] opacity-70">
+                    * stinger os requires a 32-bit (i686) compatible cpu.<br/>
+                    * minimal 128mb ram recommended for stable operation.
+                </div>
+</div>
+</div>
+</section>
+<footer class="pt-16 border-t border-[var(--border-muted)] flex flex-col md:flex-row justify-between items-start md:items-center gap-8">
+<div>
+<div class="sans text-2xl font-black text-white mb-2">stinger</div>
+<p class="text-[var(--text-dim)] text-xs">© 2026 stinger os project. mit license.</p>
+</div>
+<div class="flex gap-12 text-[var(--text-dim)]">
+<div class="flex flex-col gap-1">
+<span class="text-white text-xs font-bold mb-1">links</span>
+<a class="text-[10px] hover:text-[var(--accent-pink-white)]" href="#">github</a>
+<a class="text-[10px] hover:text-[var(--accent-pink-white)]" href="#">documentation</a>
+<a class="text-[10px] hover:text-[var(--accent-pink-white)]" href="#">cdn status</a>
+</div>
+<div class="flex flex-col gap-1 max-w-[150px]">
+<span class="text-white text-xs font-bold mb-1">warning</span>
+<p class="text-[8pt] leading-tight italic">
+                    if you break the hardware, you keep the pieces. read the source or don't fuck it up.
+                </p>
+</div>
+</div>
+</footer>
+</main>
+<div class="fixed right-8 top-1/2 -rotate-90 origin-right pointer-events-none">
+<span class="text-[var(--text-dim)] text-[8pt] tracking-widest uppercase opacity-20">32-bit module-based system / fetch_v3 / sfs_driver</span>
+</div>
+</body></html>
+    
+
