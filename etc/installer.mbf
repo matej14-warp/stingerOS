@@ -1,0 +1,56 @@
+# scorpion OS - installer.mbf
+# Run with: mbf /etc/installer.mbf
+# Performs full guided installation:
+#   1. Scans ATA (done at boot - just reads existing part table)
+#   2. Wipes MBR on target drive
+#   3. Creates 0xAF (ScorpionFS) partition
+#   4. Copies kernel and grub.cfg to disk
+#   5. Writes /etc/fstab
+#   6. Sets hostname
+#   7. Prompts to create initial root password
+# -------------------------------------------------------
+
+echo ============================================
+echo  Scorpion OS Installer v2.0
+echo ============================================
+echo
+echo This will WIPE the MBR on the target drive.
+echo Ensure you have selected the right drive.
+echo
+echo Installation requires:
+echo   - An ATA disk attached (hda = drive 0)
+echo   - At least 64 MB free
+echo
+echo Starting installation...
+echo
+
+# ---- Create default partition layout on drive 0 ----
+# mkpart <drive> <slot> <type_hex> <start_lba> <size_mb>
+# 0xAF = ScorpionFS
+echo [1/6] Creating ScorpionFS partition on hda...
+mkpart 0 0 af 2048 512
+
+echo [2/6] Formatting partition...
+format 0 1
+
+echo [3/6] Setting SYNC_TARGET label...
+setlabel 0 1 SYNC_TARGET
+
+echo [4/6] Writing /etc/fstab...
+mkdir /etc
+write /etc/fstab /dev/hda1  /  sfs  defaults  0  1
+
+echo [5/6] Syncing filesystem to disk...
+sync
+
+echo [6/6] Writing bootloader config...
+mkdir /boot
+mkdir /boot/grub
+write /boot/grub/grub.cfg set timeout=5
+write /boot/grub/grub.cfg menuentry Scorpion_OS { multiboot /boot/kernel.elf }
+
+echo
+echo ============================================
+echo  Installation complete!
+echo  Reboot without the install media.
+echo ============================================

@@ -1,0 +1,124 @@
+NAME
+    sched — cooperative task scheduler
+
+SYNOPSIS
+    #include "../kernel/sched.h"
+
+    void sched_init(void);
+    int  sched_spawn(name, fn, arg);
+    void sched_yield(void);
+    void sched_tick(int max_tasks);
+    int  sched_wait(int task_id);
+    void sched_kill(int task_id);
+    int  sched_active_count(void);
+    void sched_dump(void);
+
+DESCRIPTION
+    ScorpionOS has a cooperative round-robin task scheduler that lets
+    multiple commands or GL apps run concurrently without blocking the
+    YaoiGUI render loop.
+
+    Tasks are lightweight coroutine-style contexts.  Each task gets its
+    own 32 KiB stack (SCHED_STACK_SIZE).  The BSP render loop calls
+    sched_tick() each frame; tasks call sched_yield() to give CPU back.
+
+    A task that never yields will freeze the GUI — this is cooperative
+    scheduling, not preemptive.  Always call sched_yield() inside loops.
+
+    Up to SCHED_MAX_TASKS (16) tasks can run concurrently.
+
+LIFECYCLE
+    sched_init()
+        Must be called once before any other sched_* function.
+        YaoiGUI calls this automatically at startup.
+
+    sched_spawn(name, fn, arg)
+        Create a new task that will call fn(arg).
+        name is a human-readable label shown in serial logs and ps.
+        Returns a task ID (>0) on success, -1 if no slots or OOM.
+        The task starts immediately in READY state.
+
+    sched_yield()
+        Called from WITHIN a task to give CPU back to the BSP.
+        Also the point where SIGINT (Ctrl-C) is checked — if pending,
+        the current task is killed and control returns to BSP.
+
+    sched_tick(max_tasks)
+        Called by the BSP (render loop).  Runs up to max_tasks READY
+        tasks for one quantum each, then returns.
+        YaoiGUI calls sched_tick(2) every frame (~60 fps).
+
+    sched_wait(task_id)
+        BSP busy-waits (calling sched_tick internally) until the task
+        with task_id has finished.  Returns the task's return value.
+
+    sched_kill(task_id)
+        Immediately marks a task as dead.  Its stack is freed on the
+        next sched_tick call.
+
+    sched_active_count()
+        Returns the number of tasks currently in READY or RUNNING state.
+
+    sched_dump()
+        Prints all task slots to the serial port (COM1) for debugging.
+
+STACK OVERFLOW DETECTION
+    The bottom 64 bytes of each task's stack are stamped with a canary
+    value (0xDEADBEEF).  sched_tick() checks this before running a task;
+    if the canary is clobbered the task is killed immediately and a
+    warning is printed to serial.
+
+    If your task needs more than 32 KiB of stack (e.g. large local arrays)
+    increase SCHED_STACK_SIZE in sched.h and rebuild.
+
+CTRL-C / SIGNALS
+    Pressing Ctrl-C in a YaoiGUI terminal window calls signal_raise(SIGINT).
+    The next sched_yield() call inside the running task checks for SIGINT
+    and kills the task.  Commands that block without calling sched_yield()
+    cannot be interrupted this way — that is a bug in the command.
+
+TASK STATES
+    SCHED_READY    Waiting to run; will be picked by next sched_tick()
+    SCHED_RUNNING  Currently executing on the BSP
+    SCHED_BLOCKED  Reserved for future I/O blocking (not used yet)
+    SCHED_DEAD     Finished or killed; slot will be reused
+
+EXAMPLE — running a command as a background task
+
+    #include "../kernel/sched.h"
+    #include "../shell/shell.h"
+
+    static void my_task(void *arg) {
+        char *cmd = (char*)arg;
+        shell_exec_cmd(cmd);          /* runs the command        */
+        sched_yield();                /* good practice on exit   */
+    }
+
+    int tid = sched_spawn("ping", my_task, "ping 8.8.8.8");
+    if (tid < 0) { terminal_printf("spawn failed\n"); return; }
+    /* GUI keeps running — task executes on next sched_tick() calls */
+
+EXAMPLE — writing a yielding loop
+
+    static void blink_task(void *arg) {
+        wm_win_t *w = (wm_win_t*)arg;
+        for (int i = 0; ; i++) {
+            wm_fill_rect(w, 0, 0, 20, 20, (i & 1) ? WM_GREEN : WM_DARK);
+            sched_yield();            /* MUST yield, or GUI hangs */
+        }
+    }
+
+NOTES
+    - sched_yield() is safe to call from anywhere in task code.
+    - Do NOT call sched_yield() from BSP context (outside a task) —
+      it is a no-op in that case, not an error.
+    - Tasks share all global kernel state (VBE, terminal, kmalloc).
+      There is no isolation — a buggy task can corrupt the kernel.
+
+SEE ALSO
+    wm(man), yaoigui(man), signal(man), gl(man)
+
+FILES
+    kernel/sched.h       — public API
+    kernel/sched.c       — implementation
+    kernel/sched_asm.asm — context switch (sched_switch)

@@ -1,0 +1,15 @@
+# hello-world setup-runtime.mbf
+# Runs when user confirms installation via fetch
+
+echo Installing hello-world module...
+mkdir /modules/hello-world
+copy main.c /modules/hello-world
+
+set version 1.0
+if version == 1.0 {
+    echo hello-world v1.0 installed successfully!
+} else {
+    echo Unknown version, installed anyway.
+}
+
+echo Done. Run: cat /modules/hello-world/main.c

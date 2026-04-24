@@ -1,0 +1,90 @@
+NAME
+    yaoigui — YaoiGUI compositor and windowing system
+
+SYNOPSIS
+    yaoigui          (run from the shell prompt)
+
+    /* from C code: */
+    #include "../shell/yaoigui.h"
+    void yaoigui_run(void);            /* never returns  */
+    void yaoigui_crash_exit(void);     /* from fault handler */
+    void yaoigui_gl_present(win_t *w); /* blit GL frame  */
+
+DESCRIPTION
+    yaoigui_run() starts the YaoiGUI graphical compositor.  It draws a
+    Win10-style desktop to the VBE framebuffer, manages draggable terminal
+    windows, a taskbar, a start menu, a clock, and a software cursor.
+
+    The compositor runs at ~60 fps.  All drawing goes to a back buffer;
+    vbe_flip() blits it to the hardware framebuffer once per frame.  The
+    mouse is polled on the AP core (if online) via smp_dispatch_ap().
+
+DESKTOP LAYOUT
+    Desktop     — dark grey full-screen background (32,32,32)
+    Taskbar     — bottom 44px, dark near-black with scorpion start button
+    Start menu  — pops up above taskbar; has app list and live-tile panel
+    Windows     — draggable, Win10-style chrome, terminal input row
+
+    Maximum of 6 windows open simultaneously.
+
+TERMINAL WINDOWS
+    Each window has a scrolling output buffer (8 KiB ring) and a single-
+    line input field.  Press Enter to run a command via shell_exec_cmd().
+
+    Commands that print output should use terminal_set_hook() so their
+    characters are redirected into the window buffer.  yaoigui does this
+    automatically for commands launched from its terminal input.
+
+    Ctrl-C (0x03) aborts a running command and returns to the prompt.
+    The compositor's serial trace ([yaoigui]) records every command
+    start/end with tick timestamps — use these to diagnose hangs.
+
+HANG DIAGNOSIS
+    If yaoigui appears to freeze after launching a command:
+      1. Check the serial log: look for "shell_exec_cmd START" with no
+         matching "DONE" — the command is blocking the BSP.
+      2. Press Ctrl-C in the window input (not yet buffered — type it
+         after the command returns or use the hardware reset).
+      3. Commands like ping, wget, games use polling loops; they must be
+         patched to respect g_ctrlc_pending or yield via get_ticks().
+
+GL INTEGRATION
+    void yaoigui_gl_present(win_t *w)
+        Call this each frame after your ScorpionGL draw calls.  It blits
+        the sgl colour buffer into the window's client area.
+        Coordinate with sgl_init(client_width, client_height).
+
+CRASH GUARD
+    yaoigui wraps shell_exec_cmd() in a per-command setjmp/longjmp guard.
+    If a command triggers a kernel panic or GPF, yaoigui_crash_exit() is
+    called from the fault handler, which longjmps back to the compositor,
+    prints "[crash] command faulted", and resumes the event loop.
+
+    A top-level guard also wraps the entire yaoigui session: any unhandled
+    fault returns to the shell with a message.
+
+SERIAL TRACE TAGS
+    [yaoigui] yaoigui_run: starting
+    [yaoigui] screen WxH
+    [yaoigui] entering main loop
+    [yaoigui] heartbeat ticks=N nwins=N focus=N exec=N  (every 5s)
+    [yaoigui] click (x,y)
+    [yaoigui] key 0xXX
+    [yaoigui] dokey: ENTER cmd='...'
+    [yaoigui] shell_exec_cmd START: '...' ticks=N
+    [yaoigui] shell_exec_cmd DONE ticks=N
+    [yaoigui] shell_exec_cmd FAULTED
+    [yaoigui] drag start/end 'title'
+    [yaoigui] close window 'title'
+    [yaoigui] smact: item=N
+    [yaoigui] smenu toggle=N
+    [yaoigui] ap_online=N cpu_count=N
+    [yaoigui] crash_exit: longjmp to panic guard
+    [yaoigui] TOP-LEVEL CRASH
+
+SEE ALSO
+    wm(man), gl(man), serial(man), shell(man)
+
+FILES
+    shell/yaoigui.h   — public header
+    shell/yaoigui.c   — compositor implementation
