@@ -7,7 +7,6 @@ A 32-bit operating system with a module-based package manager (`fetch`).
 ## v4.0 Changes
 
 ### Removed
-- **`szukat`**: ASCII web browser removed. Use `wget` or `curl` for HTTP fetching from the shell.
 
 ### Bug fixes
 - **`write` / `nano`**: horizontal scroll (`view_left`) now properly tracks the cursor — long lines no longer overflow or glitch the VGA display.
