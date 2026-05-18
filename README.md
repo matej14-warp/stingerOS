@@ -6,8 +6,6 @@ A 32-bit operating system with a module-based package manager (`fetch`).
 
 ## v4.0 Changes
 
-### Removed
-
 ### Bug fixes
 - **`write` / `nano`**: horizontal scroll (`view_left`) now properly tracks the cursor — long lines no longer overflow or glitch the VGA display.
 - **`help`**: split into two pages (press any key to advance), each ≤ 24 lines.
@@ -132,12 +130,6 @@ mbf/
 shell/
   shell.c/h         - Interactive shell with readline and built-in commands
 
-cdn-backend/
-  server.py         - Python CDN server (port 5000)
-  fetch3/           - Package directories
-    hello-world/
-      main.c
-      setup-runtime.mbf
 ```
 
 ---
